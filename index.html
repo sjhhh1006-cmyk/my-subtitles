@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-<!-- 💡 保持声明为 en 语种 -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -60,7 +59,7 @@
             word-wrap: break-word;
             text-shadow: 2px 2px 4px rgba(0,0,0,0.8); 
         }
-        /* 💡 核心优化：把用来欺骗 Safari 的英文废话悄悄隐藏起来，不影响你看电影 */
+        /* 💡 核心优化：把用来欺骗 Safari 的英文废话悄悄隐藏起来，不影响看片 */
         .safari-bait {
             position: absolute;
             top: -9999px;
@@ -82,10 +81,9 @@
     </div>
     
     <div id="subtitles-container">
-        <div id="text-output">Please select a language and click the button...</div>
+        <div id="text-output">Please select a language and click the button... (请选择语言并点击开启按钮)</div>
     </div>
 
-    <!-- 💡 诱饵文本区：让 Safari 误以为这是一个长篇英文文章，强制唤醒翻译按钮 -->
     <div class="safari-bait">
         <p>This is a placeholder text to trigger the built-in translation feature of iOS Safari browser. Safari requires a certain amount of foreign text on the webpage to display the translation button in the address bar. By adding this hidden paragraph, we ensure the browser detects this page as an English website and offers the "Translate to Chinese" option to the user immediately.</p>
         <p>Once you click the translation button, Safari will monitor the entire DOM tree. When our JavaScript code updates the subtitles dynamically, Safari will automatically translate the newly appeared English or Japanese sentences into Chinese in real-time. This method avoids using any external paid APIs and utilizes the system's own powerful translation capabilities completely for free.</p>
@@ -102,7 +100,11 @@
 
         function initRecognition() {
             recognition.continuous = true;
-            recognition.interimResults = true;
+            
+            // 💡 核心改动：关闭临时结果。
+            // 这样它会等一句话说完整后一口气吐出，不会再因为单词逐个蹦出而导致 Safari 翻译高频闪烁了。
+            recognition.interimResults = false; 
+            
             recognition.lang = langSelect.value; 
 
             recognition.onresult = (event) => {
@@ -117,6 +119,7 @@
                     }
                 }
 
+                // 因为关闭了 interimResults，这里拿到的基本都是完整的句子
                 const currentSentence = finalTranscript || interimTranscript;
                 if (currentSentence.trim()) {
                     textOutput.innerText = currentSentence;
@@ -136,7 +139,7 @@
                 recognition.start();
                 startBtn.innerText = "停止";
                 startBtn.style.backgroundColor = "#ff3b30";
-                textOutput.innerText = "Listening now... Please play your video.";
+                textOutput.innerText = "Listening now... Please play your video. (正在聆听中，请开始播放视频)";
             } else {
                 isListening = false;
                 recognition.stop();
@@ -152,7 +155,7 @@
             if (wasListening) {
                 setTimeout(() => { isListening = true; recognition.start(); }, 300);
             }
-            textOutput.innerText = "Language switched, waiting for audio...";
+            textOutput.innerText = "Language switched, waiting for audio... (语种已切换，等待音频输入)";
         };
     </script>
 </body>
