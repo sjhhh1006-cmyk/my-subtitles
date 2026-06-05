@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<!-- 💡 核心细节：必须声明 lang="en"，这样 Safari 才会主动弹出“翻译此网站”的提示 -->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Live Subtitles</title>
+    <style>
+        body {
+            background-color: #000000;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 90vh;
+        }
+        #subtitles-container {
+            width: 90%;
+            max-width: 600px;
+            /* 预留出顶部空间用来放画中画视频 */
+            margin-top: 40vh; 
+            text-align: center;
+        }
+        #text-output {
+            font-size: 2.4rem;
+            font-weight: bold;
+            line-height: 1.6;
+            word-wrap: break-word;
+            /* 给字幕加点阴影，更有电影感 */
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8); 
+        }
+        button {
+            padding: 15px 32px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            background-color: #007aff;
+            color: white;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            position: fixed;
+            top: 20px;
+        }
+        button:active { background-color: #0056b3; }
+    </style>
+</head>
+<body>
+
+    <button id="startBtn">开启实时字幕 (Start)</button>
+    
+    <div id="subtitles-container">
+        <div id="text-output">点击上方按钮，开始聆听外语...</div>
+    </div>
+
+    <script>
+        const startBtn = document.getElementById('startBtn');
+        const textOutput = document.getElementById('text-output');
+
+        // 检查浏览器兼容性
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            alert("请使用 iOS Safari 浏览器打开此页面！");
+        }
+
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;       // 持续聆听，不中断
+        recognition.interimResults = true;    // 开启临时结果，英文单词会逐字蹦出来，提高实时感
+        recognition.lang = 'en-US';           // 听英文（如果是日语改成 'ja-JP'，韩语 'ko-KR'）
+
+        recognition.onresult = (event) => {
+            let interimTranscript = '';
+            let finalTranscript = '';
+
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    finalTranscript += event.results[i][0].transcript;
+                } else {
+                    interimTranscript += event.results[i][0].transcript;
+                }
+            }
+
+            // 拼装当前的文本
+            const currentSentence = finalTranscript || interimTranscript;
+            
+            if (currentSentence.trim()) {
+                // 💡 核心机制：JS 负责不断把英文塞进这个 Div。
+                // 当 Safari 开启翻译后，系统检测到 DOM 树变化，会自动在底层把这些英文翻译成中文。
+                textOutput.innerText = currentSentence;
+            }
+        };
+
+        // 异常处理
+        recognition.onerror = (event) => {
+            console.error("语音识别错误: ", event.error);
+            if(event.error === 'not-allowed') {
+                alert("请允许网页访问麦克风权限！");
+            }
+        };
+
+        recognition.onend = () => {
+            // 如果意外断开，自动重新开启，保证字幕不间断
+            recognition.start();
+        };
+
+        startBtn.onclick = () => {
+            recognition.start();
+            startBtn.innerText = "正在聆听中...";
+            startBtn.style.backgroundColor = "#34c759"; // 变成绿色
+        };
+    </script>
+</body>
+</html>
