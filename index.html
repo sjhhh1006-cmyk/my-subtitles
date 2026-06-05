@@ -58,11 +58,6 @@
             line-height: 1.6;
             word-wrap: break-word;
             text-shadow: 2px 2px 4px rgba(0,0,0,0.8); 
-            transition: color 0.1s ease;
-        }
-        /* 💡 临时字体的微弱透明样式，防止高频闪烁刺眼 */
-        .interim-text {
-            color: rgba(255, 255, 255, 0.75) !important;
         }
         .safari-bait {
             position: absolute;
@@ -98,7 +93,6 @@
         const langSelect = document.getElementById('langSelect');
         const textOutput = document.getElementById('text-output');
 
-        // 💡 对应语种的动态初始文字字典（去掉了中文）
         const initTips = {
             "en-US": "Please select a language and click the button...",
             "ja-JP": "言語を選択してボタンをクリックしてください..."
@@ -107,11 +101,13 @@
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         const recognition = new SpeechRecognition();
         let isListening = false;
+        
+        // 💡 引入全新的句子缓冲区，用来强制粘合零碎词句
+        let sentenceBuffer = ""; 
 
         function initRecognition() {
             recognition.continuous = true;
-            // 💡 重新开启实时识别，拯救速度和日语识别率
-            recognition.interimResults = true; 
+            recognition.interimResults = true; // 保持流式识别确保响应速度
             recognition.lang = langSelect.value; 
 
             recognition.onresult = (event) => {
@@ -126,14 +122,26 @@
                     }
                 }
 
-                // 优先渲染确定句，如果没有，则渲染实时蹦出的词
-                if (finalTranscript.trim()) {
-                    textOutput.classList.remove('interim-text');
-                    textOutput.innerText = finalTranscript;
-                } else if (interimTranscript.trim()) {
-                    // 💡 渲染未完成的词时，加入温和样式，减少视觉跳跃感
-                    textOutput.classList.add('interim-text');
-                    textOutput.innerText = interimTranscript;
+                // 💡 智能粘合核心算法
+                let textToDisplay = finalTranscript || interimTranscript;
+                
+                if (textToDisplay.trim()) {
+                    // 如果是英语，用空格粘合；如果是日语，直接拼接
+                    let separator = langSelect.value === "en-US" ? " " : "";
+                    let combined = sentenceBuffer ? (sentenceBuffer + separator + textToDisplay) : textToDisplay;
+                    
+                    // 只有当拼接后的长度足够长（英文超过8个单词，或日语超过12个字），或者系统判定一句话彻底完结时，才喂给Safari翻译
+                    if (finalTranscript.trim() || combined.split(' ').length > 8 || combined.length > 12) {
+                        textOutput.innerText = combined;
+                        
+                        // 句尾自动清空缓冲区，为下一句大长句做准备
+                        if (finalTranscript.trim()) {
+                            sentenceBuffer = "";
+                        }
+                    } else {
+                        // 字数不够时，先悄悄存在后台缓冲区，不频繁去晃用户的眼睛，也不破坏翻译语境
+                        sentenceBuffer = combined;
+                    }
                 }
             };
 
@@ -144,11 +152,9 @@
 
         initRecognition();
 
-        // 💡 监听下拉菜单，红圈文字秒变对应语言
         langSelect.onchange = () => {
-            const selectedLang = langSelect.value;
-            textOutput.innerText = initTips[selectedLang];
-            
+            sentenceBuffer = ""; // 切换语言清空缓存
+            textOutput.innerText = initTips[langSelect.value];
             const wasListening = isListening;
             if (isListening) { isListening = false; recognition.stop(); }
             initRecognition(); 
@@ -160,16 +166,11 @@
         startBtn.onclick = () => {
             if (!isListening) {
                 isListening = true;
+                sentenceBuffer = "";
                 recognition.start();
                 startBtn.innerText = "停止";
                 startBtn.style.backgroundColor = "#ff3b30";
-                
-                // 开启时的动态提示文字
-                if (langSelect.value === "en-US") {
-                    textOutput.innerText = "Listening now... Please play your video.";
-                } else {
-                    textOutput.innerText = "聴取中... ビ度オを再生してください。";
-                }
+                textOutput.innerText = langSelect.value === "en-US" ? "Listening now..." : "聴取中...";
             } else {
                 isListening = false;
                 recognition.stop();
