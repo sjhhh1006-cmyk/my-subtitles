@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- 💡 保持声明为 en 语种 -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -45,9 +46,7 @@
             color: white;
             border: none;
             border-radius: 8px;
-            cursor: pointer;
         }
-        button:active { background-color: #0056b3; }
         #subtitles-container {
             width: 90%;
             max-width: 600px;
@@ -60,6 +59,15 @@
             line-height: 1.6;
             word-wrap: break-word;
             text-shadow: 2px 2px 4px rgba(0,0,0,0.8); 
+        }
+        /* 💡 核心优化：把用来欺骗 Safari 的英文废话悄悄隐藏起来，不影响你看电影 */
+        .safari-bait {
+            position: absolute;
+            top: -9999px;
+            left: -9999px;
+            opacity: 0;
+            width: 1px;
+            height: 1px;
         }
     </style>
 </head>
@@ -74,7 +82,13 @@
     </div>
     
     <div id="subtitles-container">
-        <div id="text-output">选择语言并点击开启按钮...</div>
+        <div id="text-output">Please select a language and click the button...</div>
+    </div>
+
+    <!-- 💡 诱饵文本区：让 Safari 误以为这是一个长篇英文文章，强制唤醒翻译按钮 -->
+    <div class="safari-bait">
+        <p>This is a placeholder text to trigger the built-in translation feature of iOS Safari browser. Safari requires a certain amount of foreign text on the webpage to display the translation button in the address bar. By adding this hidden paragraph, we ensure the browser detects this page as an English website and offers the "Translate to Chinese" option to the user immediately.</p>
+        <p>Once you click the translation button, Safari will monitor the entire DOM tree. When our JavaScript code updates the subtitles dynamically, Safari will automatically translate the newly appeared English or Japanese sentences into Chinese in real-time. This method avoids using any external paid APIs and utilizes the system's own powerful translation capabilities completely for free.</p>
     </div>
 
     <script>
@@ -83,18 +97,12 @@
         const textOutput = document.getElementById('text-output');
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-            alert("请使用 iOS Safari 浏览器打开！");
-        }
-
-        let recognition = new SpeechRecognition();
+        const recognition = new SpeechRecognition();
         let isListening = false;
 
-        // 配置语音识别参数
         function initRecognition() {
             recognition.continuous = true;
             recognition.interimResults = true;
-            // 动态获取下拉菜单选择的语言：en-US 或 ja-JP
             recognition.lang = langSelect.value; 
 
             recognition.onresult = (event) => {
@@ -111,35 +119,24 @@
 
                 const currentSentence = finalTranscript || interimTranscript;
                 if (currentSentence.trim()) {
-                    // 当英文或日文蹦出来时，Safari 会在后台瞬间帮我们翻译成中文
                     textOutput.innerText = currentSentence;
                 }
             };
 
-            recognition.onerror = (event) => {
-                console.error("识别错误: ", event.error);
-            };
-
-            // 长视频自动重连机制
             recognition.onend = () => {
-                if (isListening) {
-                    console.log("重新连接聆听...");
-                    recognition.start();
-                }
+                if (isListening) { recognition.start(); }
             };
         }
 
-        // 初始化
         initRecognition();
 
-        // 点击开始/停止按钮
         startBtn.onclick = () => {
             if (!isListening) {
                 isListening = true;
                 recognition.start();
                 startBtn.innerText = "停止";
                 startBtn.style.backgroundColor = "#ff3b30";
-                textOutput.innerText = "正在聆听中，请播放视频...";
+                textOutput.innerText = "Listening now... Please play your video.";
             } else {
                 isListening = false;
                 recognition.stop();
@@ -148,25 +145,14 @@
             }
         };
 
-        // 💡 核心改动：当你在网页上切换语言时，自动重置识别引擎
         langSelect.onchange = () => {
             const wasListening = isListening;
-            if (isListening) {
-                isListening = false;
-                recognition.stop(); // 先停止旧语种
-            }
-            
-            // 重新初始化并更换语种
+            if (isListening) { isListening = false; recognition.stop(); }
             initRecognition(); 
-            
             if (wasListening) {
-                // 如果本来就在运行，切换后自动恢复运行
-                setTimeout(() => {
-                    isListening = true;
-                    recognition.start();
-                }, 300);
+                setTimeout(() => { isListening = true; recognition.start(); }, 300);
             }
-            textOutput.innerText = "语种已切换，等待识别...";
+            textOutput.innerText = "Language switched, waiting for audio...";
         };
     </script>
 </body>
