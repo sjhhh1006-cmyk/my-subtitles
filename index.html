@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 多语言实时字幕 (单机画中画专用版)</title>
+    <title>AI 多语言实时字幕 (终极抗噪版)</title>
     <style>
         body {
             background-color: #000000;
@@ -14,13 +14,12 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            /* 居中分布，强制让整体视觉重心下移，完美避开顶部画中画 */
             justify-content: center; 
             min-height: 95vh;
             box-sizing: border-box;
+            user-select: none;
         }
 
-        /* 控制面板移到最底部，彻底把屏幕上方腾给画中画视频 */
         .control-panel {
             position: fixed;
             bottom: 30px; 
@@ -43,26 +42,18 @@
             font-weight: bold;
         }
 
-        select {
-            background-color: #222;
-            border: 1px solid #444;
-        }
+        select { background-color: #222; border: 1px solid #444; }
+        button { background-color: #007aff; border: none; }
 
-        button {
-            background-color: #007aff;
-            border: none;
-        }
-
-        /* 字幕容器：留出顶部将近一半的屏幕空间，防止顶到画中画视频的屁股 */
         #subtitles-container {
             width: 95%;
             max-width: 600px;
             margin-top: 5vh; 
-            margin-bottom: 110px; /* 留出底部控制栏的避让空间 */
+            margin-bottom: 110px;
             text-align: center;
+            cursor: pointer;
         }
 
-        /* 高对比度毛玻璃遮罩，用余光也能轻松看清翻译 */
         #text-output {
             font-size: 2.0rem; 
             font-weight: bold;
@@ -75,23 +66,24 @@
             border: 1px solid rgba(255, 255, 255, 0.12);
             padding: 20px;
             border-radius: 16px;
+            transition: all 0.2s ease;
+        }
+        
+        /* 提示用户可以点击清屏的微弱小字 */
+        .tip-text {
+            font-size: 0.8rem;
+            color: #666;
+            margin-top: 8px;
         }
 
-        /* 诱饵文本：确保足够长，强行唤醒 Safari 的整页翻译机制 */
-        .safari-bait {
-            position: absolute;
-            top: -9999px;
-            left: -9999px;
-            opacity: 0;
-            width: 1px;
-            height: 1px;
-        }
+        .safari-bait { position: absolute; top: -9999px; left: -9999px; opacity: 0; }
     </style>
 </head>
 <body>
 
     <div id="subtitles-container">
         <div id="text-output">Please select a language and click the button...</div>
+        <div class="tip-text">💡 听不懂或卡住时，可点击上方字幕块手动清空缓存</div>
     </div>
 
     <div class="control-panel">
@@ -104,13 +96,14 @@
 
     <div class="safari-bait">
         <p>This is a placeholder text to trigger the built-in translation feature of iOS Safari browser. Safari requires a certain amount of foreign text on the webpage to display the translation button in the address bar. By adding this hidden paragraph, we ensure the browser detects this page as an English website and offers the "Translate to Chinese" option to the user immediately.</p>
-        <p>Once you click the translation button, Safari will monitor the entire DOM tree. When our JavaScript code updates the subtitles dynamically, Safari will automatically translate the newly appeared English or Japanese sentences into Chinese in real-time. This method avoids using any external paid APIs and utilizes the system's own powerful translation capabilities completely for free.</p>
+        <p>Once you click the translation button, Safari will monitor the entire DOM tree. When our JavaScript code updates the subtitles dynamically, Safari will automatically translate the newly appeared English or Japanese sentences into Chinese in real-time.</p>
     </div>
 
     <script>
         const startBtn = document.getElementById('startBtn');
         const langSelect = document.getElementById('langSelect');
         const textOutput = document.getElementById('text-output');
+        const subtitleContainer = document.getElementById('subtitles-container');
 
         const initTips = {
             "en-US": "Please select a language and click the button...",
@@ -120,14 +113,18 @@
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         let recognition = null;
         let isListening = false;
-        
-        // 核心：滑动窗口历史队列（最多保留 2 句话提供翻译上下文）
         let speechHistory = []; 
+
+        // 噪声与语气词黑名单过滤逻辑
+        function cleanNoise(text) {
+            // 过滤掉单独的语气助词、标点碎片
+            return text.replace(/^(ah|uh|um|oh|er|eh|hmm|yeah|well|ええと|あの|えー|ま|うーん|と)$/gi, '').trim();
+        }
 
         function initRecognition() {
             recognition = new SpeechRecognition();
             recognition.continuous = true;
-            recognition.interimResults = false; // 关闭临时干扰流，只抓死句，大幅度提升外放回录的准确率
+            recognition.interimResults = false; 
             recognition.lang = langSelect.value; 
 
             recognition.onresult = (event) => {
@@ -138,44 +135,52 @@
                     }
                 }
 
-                if (latestText.trim()) {
-                    speechHistory.push(latestText.trim());
+                let cleanedText = cleanNoise(latestText);
+
+                if (cleanedText) {
+                    speechHistory.push(cleanedText);
                     
-                    // 队列机制：滚动保留最近2句，既能凑出语境给Safari翻译，又不会让屏幕过长
-                    if (speechHistory.length > 2) {
+                    // 💡 优化 1：自适应语义拼接算法
+                    let totalLen = speechHistory.join("").length;
+                    let maxLines = langSelect.value === "en-US" ? 2 : 3;
+                    
+                    // 如果总字数太少，允许队列存 3 句以拼凑完整上下文；否则严格维持在 2 句防爆屏
+                    if (totalLen > 40 || speechHistory.length > maxLines) {
                         speechHistory.shift(); 
                     }
 
                     let joinStr = langSelect.value === "en-US" ? " " : "";
+                    
+                    // 💡 优化 3：OLED防烧屏位置微调 (每次刷新随机偏移1-2像素)
+                    let jitterX = Math.floor(Math.random() * 3) - 1;
+                    let jitterY = Math.floor(Math.random() * 3) - 1;
+                    textOutput.style.transform = `translate(${jitterX}px, ${jitterY}px)`;
+                    
                     textOutput.innerText = speechHistory.join(joinStr);
                 }
             };
 
-            // 核心：防休眠。防止视频无声段落导致 iOS 麦克风自动锁死断连
             recognition.onerror = (event) => {
-                console.log("识别触发内部捕获异常:", event.error);
                 if (isListening && (event.error === 'no-speech' || event.error === 'audio-capture' || event.error === 'not-allowed')) {
                     autoRestart();
                 }
             };
 
-            recognition.onend = () => {
-                if (isListening) { 
-                    autoRestart(); 
-                }
-            };
+            recognition.onend = () => { if (isListening) autoRestart(); };
         }
 
         function autoRestart() {
-            if (recognition) {
-                try { recognition.stop(); } catch(e){}
-            }
+            if (recognition) { try { recognition.stop(); } catch(e){} }
             setTimeout(() => {
-                if (isListening) {
-                    try { recognition.start(); } catch(e){}
-                }
-            }, 350); // 350ms 快速无缝重启拉活麦克风
+                if (isListening) { try { recognition.start(); } catch(e){} }
+            }, 300);
         }
+
+        // 💡 优化 2：手动清空缓存点击事件（解决死句卡在屏幕上的问题）
+        subtitleContainer.onclick = () => {
+            speechHistory = [];
+            textOutput.innerText = isListening ? (langSelect.value === "en-US" ? "Listening..." : "聴取中...") : initTips[langSelect.value];
+        };
 
         langSelect.onchange = () => {
             speechHistory = []; 
@@ -188,20 +193,13 @@
                 isListening = true;
                 speechHistory = [];
                 if (!recognition) initRecognition();
-                try {
-                    recognition.start();
-                } catch(e) {
-                    initRecognition();
-                    recognition.start();
-                }
+                try { recognition.start(); } catch(e) { initRecognition(); recognition.start(); }
                 startBtn.innerText = "停止";
                 startBtn.style.backgroundColor = "#ff3b30";
                 textOutput.innerText = langSelect.value === "en-US" ? "Listening now..." : "聴取中...";
             } else {
                 isListening = false;
-                if (recognition) {
-                    try { recognition.stop(); } catch(e){}
-                }
+                if (recognition) { try { recognition.stop(); } catch(e){} }
                 startBtn.innerText = "开启字幕";
                 startBtn.style.backgroundColor = "#007aff";
                 textOutput.innerText = initTips[langSelect.value];
