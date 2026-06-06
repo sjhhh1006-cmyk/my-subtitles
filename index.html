@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 多语言实时字幕 (画中画优化版)</title>
+    <title>AI 多语言实时字幕 (瀑布断句版)</title>
     <style>
         body {
             background-color: #000000;
@@ -14,7 +14,6 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            /* 改变对齐方式：让内容整体从顶部开始排列 */
             justify-content: flex-start; 
             min-height: 100vh;
             box-sizing: border-box;
@@ -46,35 +45,54 @@
         select { background-color: #222; border: 1px solid #444; }
         button { background-color: #007aff; border: none; }
 
+        /* 瀑布流核心容器 */
         #subtitles-container {
             width: 95%;
             max-width: 600px;
-            /* 核心改动：使用 margin-top 让字幕块强行沉底，避开上方画中画 */
             margin-top: auto; 
-            margin-bottom: 140px; /* 给底部控制栏预留足够空间 */
-            text-align: center;
+            margin-bottom: 150px; /* 沉底显示，避开上方画中画 */
+            display: flex;
+            flex-direction: column; /* 让子元素从上往下排 */
+            gap: 12px;
             cursor: pointer;
         }
 
-        #text-output {
-            font-size: 2.2rem; /* 略微放大字体，更适合手机远距离观看 */
+        /* 单条字幕块样式 */
+        .subtitle-line {
+            font-size: 2.2rem;
             font-weight: bold;
-            line-height: 1.5;
+            line-height: 1.4;
             word-wrap: break-word;
+            text-align: center;
             text-shadow: 2px 2px 4px rgba(0,0,0,1);
-            background: rgba(15, 15, 15, 0.85); /* 稍微加深背景，抗噪视觉效果更好 */
+            background: rgba(15, 15, 15, 0.85);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            padding: 20px;
-            border-radius: 16px;
-            transition: transform 0.1s ease;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 14px 20px;
+            border-radius: 14px;
+            /* 进场和顶升时的平滑动画 */
+            animation: slideUp 0.25s ease-out forwards;
+            opacity: 1;
+            transition: opacity 0.3s ease;
+        }
+
+        /* 较旧的字幕半透明，突出最新字幕 */
+        .subtitle-line:not(:last-child) {
+            opacity: 0.5;
+            font-size: 1.8rem; /* 旧字幕稍微变小，形成视觉梯队 */
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
         }
         
         .tip-text {
             font-size: 0.8rem;
-            color: #666;
-            margin-top: 12px;
+            color: #555;
+            text-align: center;
+            margin-top: 5px;
         }
 
         .safari-bait { position: absolute; top: -9999px; left: -9999px; opacity: 0; }
@@ -83,9 +101,9 @@
 <body>
 
     <div id="subtitles-container">
-        <div id="text-output">Please select a language and click the button...</div>
-        <div class="tip-text">💡 听不懂或卡住时，可点击上方字幕块手动清空缓存</div>
+        <div class="subtitle-line" id="init-tip">Please select a language and click the button...</div>
     </div>
+    <div class="tip-text">💡 遇到死句或卡住时，可点击上方任意字幕块手动清屏</div>
 
     <div class="control-panel">
         <select id="langSelect">
@@ -103,8 +121,7 @@
     <script>
         const startBtn = document.getElementById('startBtn');
         const langSelect = document.getElementById('langSelect');
-        const textOutput = document.getElementById('text-output');
-        const subtitleContainer = document.getElementById('subtitles-container');
+        const container = document.getElementById('subtitles-container');
 
         const initTips = {
             "en-US": "Please select a language and click the button...",
@@ -114,18 +131,37 @@
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         let recognition = null;
         let isListening = false;
-        let speechHistory = []; 
+        let audioStream = null; // 用于保存魔改的音频流引用
+        
+        const MAX_LINES = 3; // 屏幕上最多保留的旧字幕行数，超过自动从顶部剔除
 
         function cleanNoise(text) {
             return text.replace(/^(ah|uh|um|oh|er|eh|hmm|yeah|well|ええと|あの|えー|ま|うーん|と)$/gi, '').trim();
         }
 
+        // 核心技术：阻断 iOS 回音消除并强行开启自动增益
+        async function killEchoAndBoost() {
+            try {
+                if (audioStream) { audioStream.getTracks().forEach(track => track.stop()); }
+                // 强行拉起底层麦克风，注入降噪对抗参数
+                audioStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: false, // 关闭回音消除，允许抓取扬声器声音
+                        noiseSuppression: false, // 关闭噪声抑制，防止日语弱音被杀
+                        autoGainControl: true    // 开启自动增益，放大视频声音
+                    }
+                });
+            } catch (e) {
+                console.log("音频底层魔改请求被拒绝或不支持，转为默认模式", e);
+            }
+        }
+
         function initRecognition() {
             recognition = new SpeechRecognition();
             recognition.continuous = true;
-            recognition.interimResults = false; 
             
-            // 每次初始化时实时获取当前选择的语言
+            // 关键：设为 false，坚决不蹦单字！不给 Safari 闪烁的机会
+            recognition.interimResults = false; 
             recognition.lang = langSelect.value; 
 
             recognition.onresult = (event) => {
@@ -137,25 +173,8 @@
                 }
 
                 let cleanedText = cleanNoise(latestText);
-
                 if (cleanedText) {
-                    speechHistory.push(cleanedText);
-                    
-                    let totalLen = speechHistory.join("").length;
-                    let maxLines = langSelect.value === "en-US" ? 2 : 3;
-                    
-                    if (totalLen > 40 || speechHistory.length > maxLines) {
-                        speechHistory.shift(); 
-                    }
-
-                    let joinStr = langSelect.value === "en-US" ? " " : "";
-                    
-                    // OLED防烧屏微调
-                    let jitterX = Math.floor(Math.random() * 3) - 1;
-                    let jitterY = Math.floor(Math.random() * 3) - 1;
-                    textOutput.style.transform = `translate(${jitterX}px, ${jitterY}px)`;
-                    
-                    textOutput.innerText = speechHistory.join(joinStr);
+                    pushSubtitle(cleanedText);
                 }
             };
 
@@ -168,58 +187,106 @@
             recognition.onend = () => { if (isListening) autoRestart(); };
         }
 
-        function autoRestart() {
+        // 瀑布流顶升与清除核心算法
+        function pushSubtitle(text) {
+            // 移除初始化的提示语
+            const tipNode = document.getElementById('init-tip');
+            if (tipNode) tipNode.remove();
+
+            // 1. 创建新字幕行
+            const newLine = document.createElement('div');
+            newLine.className = 'subtitle-line';
+            
+            // OLED防烧屏位置微调 (每次生成新行时随机抖动 1 像素)
+            let jitterX = Math.floor(Math.random() * 3) - 1;
+            newLine.style.marginLeft = `${jitterX}px`;
+
+            newLine.innerText = text;
+
+            // 2. 将新字幕从底部塞入容器（新行诞生，旧行自动被往上顶）
+            container.appendChild(newLine);
+
+            // 3. 检查堆积数量，如果超过限制，剥离最顶部的旧字幕
+            const currentLines = container.getElementsByClassName('subtitle-line');
+            if (currentLines.length > MAX_LINES) {
+                const oldestLine = currentLines[0];
+                oldestLine.style.opacity = '0'; // 触发淡出
+                setTimeout(() => {
+                    if (oldestLine && oldestLine.parentNode === container) {
+                        oldestLine.remove(); // 彻底从DOM树移除
+                    }
+                }, 300);
+            }
+        }
+
+        async function autoRestart() {
             if (recognition) { try { recognition.stop(); } catch(e){} }
-            setTimeout(() => {
-                // 重启时必须重新建立实例或强制更新语言，否则语言切换会失效
+            setTimeout(async () => {
                 if (isListening) { 
+                    await killEchoAndBoost(); // 重启音频对抗
                     initRecognition(); 
                     try { recognition.start(); } catch(e){} 
                 }
-            }, 300);
+            }, 50); // 极速 50ms 无缝重启，死咬日语语音
         }
 
-        // 手动清空缓存
-        subtitleContainer.onclick = () => {
-            speechHistory = [];
-            textOutput.innerText = isListening ? (langSelect.value === "en-US" ? "Listening..." : "聴取中...") : initTips[langSelect.value];
-        };
-
-        // 核心修复：当用户切换语言时，不管当前是否在录音，直接重置 recognition 实例
-        langSelect.onchange = () => {
-            speechHistory = []; 
-            textOutput.innerText = initTips[langSelect.value];
-            if (isListening) {
-                // 强制销毁旧语言实例，并触发带新语言的重启
-                if (recognition) { try { recognition.stop(); } catch(e){} }
-                initRecognition();
-                try { recognition.start(); } catch(e){}
-            } else {
-                recognition = null; // 未开启时清空，下次开启自动初始化新语言
+        // 点击字幕区域任意位置手动清屏
+        container.onclick = () => {
+            container.innerHTML = '';
+            if (!isListening) {
+                const initNode = document.createElement('div');
+                initNode.className = 'subtitle-line';
+                initNode.id = 'init-tip';
+                initNode.innerText = initTips[langSelect.value];
+                container.appendChild(initNode);
             }
         };
 
-        startBtn.onclick = () => {
+        langSelect.onchange = async () => {
+            container.innerHTML = '';
+            const initNode = document.createElement('div');
+            initNode.className = 'subtitle-line';
+            initNode.id = 'init-tip';
+            initNode.innerText = initTips[langSelect.value];
+            container.appendChild(initNode);
+
+            if (isListening) {
+                if (recognition) { try { recognition.stop(); } catch(e){} }
+                await killEchoAndBoost();
+                initRecognition();
+                try { recognition.start(); } catch(e){}
+            } else {
+                recognition = null;
+            }
+        };
+
+        startBtn.onclick = async () => {
             if (!isListening) {
                 isListening = true;
-                speechHistory = [];
-                // 每次点击开启，都根据当前选择的语言重新初始化
-                initRecognition(); 
-                try { 
-                    recognition.start(); 
-                } catch(e) { 
-                    initRecognition(); 
-                    recognition.start(); 
-                }
+                container.innerHTML = '';
+                
+                await killEchoAndBoost(); // 1. 先激活底层防过滤音频约束
+                initRecognition();        // 2. 再初始化语音识别
+                
+                try { recognition.start(); } catch(e) { initRecognition(); recognition.start(); }
+                
                 startBtn.innerText = "停止";
                 startBtn.style.backgroundColor = "#ff3b30";
-                textOutput.innerText = langSelect.value === "en-US" ? "Listening now..." : "聴取中...";
+                pushSubtitle(langSelect.value === "en-US" ? "System listening..." : "システム聴取中...");
             } else {
                 isListening = false;
                 if (recognition) { try { recognition.stop(); } catch(e){} }
+                if (audioStream) { audioStream.getTracks().forEach(track => track.stop()); audioStream = null; }
+                
                 startBtn.innerText = "开启字幕";
                 startBtn.style.backgroundColor = "#007aff";
-                textOutput.innerText = initTips[langSelect.value];
+                
+                container.innerHTML = '';
+                const initNode = document.createElement('div');
+                initNode.className = 'subtitle-line';
+                initNode.id = 'init-tip';
+                initNode.innerText = initTips[langSelect.value];
+                container.appendChild(initNode);
             }
         };
     </script>
