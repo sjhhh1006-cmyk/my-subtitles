@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 多语言实时字幕</title>
+    <title>AI 多语言实时字幕 (优化版)</title>
     <style>
         body {
             background-color: #000000;
@@ -49,7 +49,7 @@
         #subtitles-container {
             width: 90%;
             max-width: 600px;
-            margin-top: 35vh; 
+            margin-top: 20vh; 
             text-align: center;
         }
         #text-output {
@@ -99,81 +99,96 @@
         };
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        const recognition = new SpeechRecognition();
+        let recognition = null;
         let isListening = false;
         
-        // 💡 引入全新的句子缓冲区，用来强制粘合零碎词句
-        let sentenceBuffer = ""; 
+        // 优化：只保留一个纯粹的最终历史句群展示
+        let finalHistory = []; 
 
         function initRecognition() {
+            recognition = new SpeechRecognition();
             recognition.continuous = true;
-            recognition.interimResults = true; // 保持流式识别确保响应速度
+            
+            // 💡 关键改动 1：关闭临时流，只听最终确定的句子，彻底解决鬼畜重复和日语不识别问题
+            recognition.interimResults = false; 
             recognition.lang = langSelect.value; 
 
             recognition.onresult = (event) => {
-                let interimTranscript = '';
-                let finalTranscript = '';
+                let newFinalText = '';
 
+                // 提取本次识别到的所有确定的文本
                 for (let i = event.resultIndex; i < event.results.length; ++i) {
                     if (event.results[i].isFinal) {
-                        finalTranscript += event.results[i][0].transcript;
-                    } else {
-                        interimTranscript += event.results[i][0].transcript;
+                        newFinalText += event.results[i][0].transcript;
                     }
                 }
 
-                // 💡 智能粘合核心算法
-                let textToDisplay = finalTranscript || interimTranscript;
-                
-                if (textToDisplay.trim()) {
-                    // 如果是英语，用空格粘合；如果是日语，直接拼接
-                    let separator = langSelect.value === "en-US" ? " " : "";
-                    let combined = sentenceBuffer ? (sentenceBuffer + separator + textToDisplay) : textToDisplay;
-                    
-                    // 只有当拼接后的长度足够长（英文超过8个单词，或日语超过12个字），或者系统判定一句话彻底完结时，才喂给Safari翻译
-                    if (finalTranscript.trim() || combined.split(' ').length > 8 || combined.length > 12) {
-                        textOutput.innerText = combined;
-                        
-                        // 句尾自动清空缓冲区，为下一句大长句做准备
-                        if (finalTranscript.trim()) {
-                            sentenceBuffer = "";
-                        }
-                    } else {
-                        // 字数不够时，先悄悄存在后台缓冲区，不频繁去晃用户的眼睛，也不破坏翻译语境
-                        sentenceBuffer = combined;
+                if (newFinalText.trim()) {
+                    // 💡 关键改动 2：采用队列机制，只保留最近的 2 句话，既能凑成完整语境给Safari翻译，又不会让屏幕太长
+                    finalHistory.push(newFinalText.trim());
+                    if (finalHistory.length > 2) {
+                        finalHistory.shift(); 
                     }
+
+                    // 拼接展示
+                    let separator = langSelect.value === "en-US" ? " " : "";
+                    textOutput.innerText = finalHistory.join(separator);
+                }
+            };
+
+            recognition.onerror = (event) => {
+                console.error("识别错误:", event.error);
+                // 针对iOS静音或权限引发的错误进行静默重启
+                if (event.error === 'not-allowed' || event.error === 'no-speech') {
+                    restartRecognition();
                 }
             };
 
             recognition.onend = () => {
-                if (isListening) { recognition.start(); }
+                if (isListening) { 
+                    restartRecognition(); 
+                }
             };
         }
 
-        initRecognition();
+        function restartRecognition() {
+            if (recognition) {
+                try { recognition.stop(); } catch(e){}
+            }
+            setTimeout(() => {
+                if (isListening) {
+                    try { recognition.start(); } catch(e){}
+                }
+            }, 400);
+        }
 
         langSelect.onchange = () => {
-            sentenceBuffer = ""; // 切换语言清空缓存
+            finalHistory = []; 
             textOutput.innerText = initTips[langSelect.value];
-            const wasListening = isListening;
-            if (isListening) { isListening = false; recognition.stop(); }
-            initRecognition(); 
-            if (wasListening) {
-                setTimeout(() => { isListening = true; recognition.start(); }, 300);
+            if (isListening) {
+                restartRecognition();
             }
         };
 
         startBtn.onclick = () => {
             if (!isListening) {
                 isListening = true;
-                sentenceBuffer = "";
-                recognition.start();
+                finalHistory = [];
+                if (!recognition) initRecognition();
+                try {
+                    recognition.start();
+                } catch(e) {
+                    initRecognition();
+                    recognition.start();
+                }
                 startBtn.innerText = "停止";
                 startBtn.style.backgroundColor = "#ff3b30";
                 textOutput.innerText = langSelect.value === "en-US" ? "Listening now..." : "聴取中...";
             } else {
                 isListening = false;
-                recognition.stop();
+                if (recognition) {
+                    try { recognition.stop(); } catch(e){}
+                }
                 startBtn.innerText = "开启字幕";
                 startBtn.style.backgroundColor = "#007aff";
                 textOutput.innerText = initTips[langSelect.value];
