@@ -14,7 +14,7 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: flex-start; 
+            justify-content: flex-start;
             min-height: 100vh;
             box-sizing: border-box;
             user-select: none;
@@ -22,7 +22,7 @@
 
         .control-panel {
             position: fixed;
-            bottom: 30px; 
+            bottom: 30px;
             display: flex;
             gap: 10px;
             align-items: center;
@@ -45,19 +45,53 @@
         select { background-color: #222; border: 1px solid #444; }
         button { background-color: #007aff; border: none; }
 
-        /* 瀑布流核心容器 */
+        #volume-bar-wrap {
+            position: fixed;
+            bottom: 90px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 200px;
+            background: rgba(40,40,40,0.8);
+            border-radius: 8px;
+            padding: 6px 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            z-index: 999;
+        }
+        #volume-label {
+            font-size: 11px;
+            color: #888;
+            white-space: nowrap;
+        }
+        #volume-bar-bg {
+            flex: 1;
+            height: 6px;
+            background: #333;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        #volume-bar {
+            height: 100%;
+            width: 0%;
+            background: #30d158;
+            border-radius: 3px;
+            transition: width 0.1s;
+        }
+        #volume-bar.warn { background: #ff9f0a; }
+        #volume-bar.low  { background: #ff3b30; }
+
         #subtitles-container {
             width: 95%;
             max-width: 600px;
-            margin-top: auto; 
-            margin-bottom: 150px; /* 沉底显示，避开上方画中画 */
+            margin-top: auto;
+            margin-bottom: 160px;
             display: flex;
-            flex-direction: column; /* 让子元素从上往下排 */
+            flex-direction: column;
             gap: 12px;
             cursor: pointer;
         }
 
-        /* 单条字幕块样式 */
         .subtitle-line {
             font-size: 2.2rem;
             font-weight: bold;
@@ -71,23 +105,21 @@
             border: 1px solid rgba(255, 255, 255, 0.12);
             padding: 14px 20px;
             border-radius: 14px;
-            /* 进场和顶升时的平滑动画 */
             animation: slideUp 0.25s ease-out forwards;
             opacity: 1;
             transition: opacity 0.3s ease;
         }
 
-        /* 较旧的字幕半透明，突出最新字幕 */
         .subtitle-line:not(:last-child) {
             opacity: 0.5;
-            font-size: 1.8rem; /* 旧字幕稍微变小，形成视觉梯队 */
+            font-size: 1.8rem;
         }
 
         @keyframes slideUp {
             from { transform: translateY(20px); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
         }
-        
+
         .tip-text {
             font-size: 0.8rem;
             color: #555;
@@ -104,6 +136,13 @@
         <div class="subtitle-line" id="init-tip">Please select a language and click the button...</div>
     </div>
     <div class="tip-text">💡 遇到死句或卡住时，可点击上方任意字幕块手动清屏</div>
+
+    <div id="volume-bar-wrap">
+        <span id="volume-label">收音</span>
+        <div id="volume-bar-bg">
+            <div id="volume-bar" class="low"></div>
+        </div>
+    </div>
 
     <div class="control-panel">
         <select id="langSelect">
@@ -122,6 +161,8 @@
         const startBtn = document.getElementById('startBtn');
         const langSelect = document.getElementById('langSelect');
         const container = document.getElementById('subtitles-container');
+        const volumeBar = document.getElementById('volume-bar');
+        const volumeLabel = document.getElementById('volume-label');
 
         const initTips = {
             "en-US": "Please select a language and click the button...",
@@ -131,38 +172,106 @@
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         let recognition = null;
         let isListening = false;
-        let audioStream = null; // 用于保存魔改的音频流引用
-        
-        const MAX_LINES = 3; // 屏幕上最多保留的旧字幕行数，超过自动从顶部剔除
+        let audioStream = null;
+        let audioCtx = null;
+        let gainNode = null;
+        let analyserNode = null;
+        let volumeTimer = null;
+        const GAIN_VALUE = 4.0; // 音量放大倍数，效果不好可改为 5.0 或 6.0
+
+        function startVolumeMonitor() {
+            if (!analyserNode) return;
+            const bufferLength = analyserNode.fftSize;
+            const dataArray = new Uint8Array(bufferLength);
+
+            function tick() {
+                if (!isListening) return;
+                analyserNode.getByteTimeDomainData(dataArray);
+                let sum = 0;
+                for (let i = 0; i < bufferLength; i++) {
+                    const v = (dataArray[i] - 128) / 128;
+                    sum += v * v;
+                }
+                const rms = Math.sqrt(sum / bufferLength);
+                const pct = Math.min(100, Math.round(rms * 400));
+
+                volumeBar.style.width = pct + '%';
+                if (pct > 40) {
+                    volumeBar.className = '';
+                    volumeLabel.style.color = '#30d158';
+                } else if (pct > 15) {
+                    volumeBar.className = 'warn';
+                    volumeLabel.style.color = '#ff9f0a';
+                } else {
+                    volumeBar.className = 'low';
+                    volumeLabel.style.color = '#ff3b30';
+                }
+
+                volumeTimer = requestAnimationFrame(tick);
+            }
+            tick();
+        }
+
+        function stopVolumeMonitor() {
+            if (volumeTimer) cancelAnimationFrame(volumeTimer);
+            volumeBar.style.width = '0%';
+            volumeBar.className = 'low';
+            volumeLabel.style.color = '#888';
+        }
+
+        async function killEchoAndBoost() {
+            try {
+                if (audioStream) audioStream.getTracks().forEach(t => t.stop());
+                if (audioCtx) { try { audioCtx.close(); } catch(e){} }
+
+                audioStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false
+                    }
+                });
+
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioCtx.createMediaStreamSource(audioStream);
+
+                gainNode = audioCtx.createGain();
+                gainNode.gain.value = GAIN_VALUE;
+
+                analyserNode = audioCtx.createAnalyser();
+                analyserNode.fftSize = 256;
+
+                const destination = audioCtx.createMediaStreamDestination();
+
+                source.connect(gainNode);
+                gainNode.connect(analyserNode);
+                analyserNode.connect(destination);
+
+                const processedTrack = destination.stream.getAudioTracks()[0];
+                const originalTrack = audioStream.getAudioTracks()[0];
+                audioStream.removeTrack(originalTrack);
+                audioStream.addTrack(processedTrack);
+
+                startVolumeMonitor();
+
+            } catch (e) {
+                console.log("AudioContext 增益失败，回退默认模式", e);
+                try {
+                    if (audioStream) audioStream.getTracks().forEach(t => t.stop());
+                    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                } catch(e2) {}
+            }
+        }
 
         function cleanNoise(text) {
             return text.replace(/^(ah|uh|um|oh|er|eh|hmm|yeah|well|ええと|あの|えー|ま|うーん|と)$/gi, '').trim();
         }
 
-        // 核心技术：阻断 iOS 回音消除并强行开启自动增益
-        async function killEchoAndBoost() {
-            try {
-                if (audioStream) { audioStream.getTracks().forEach(track => track.stop()); }
-                // 强行拉起底层麦克风，注入降噪对抗参数
-                audioStream = await navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        echoCancellation: false, // 关闭回音消除，允许抓取扬声器声音
-                        noiseSuppression: false, // 关闭噪声抑制，防止日语弱音被杀
-                        autoGainControl: true    // 开启自动增益，放大视频声音
-                    }
-                });
-            } catch (e) {
-                console.log("音频底层魔改请求被拒绝或不支持，转为默认模式", e);
-            }
-        }
-
         function initRecognition() {
             recognition = new SpeechRecognition();
             recognition.continuous = true;
-            
-            // 关键：设为 false，坚决不蹦单字！不给 Safari 闪烁的机会
-            recognition.interimResults = false; 
-            recognition.lang = langSelect.value; 
+            recognition.interimResults = false;
+            recognition.lang = langSelect.value;
 
             recognition.onresult = (event) => {
                 let latestText = '';
@@ -171,11 +280,8 @@
                         latestText += event.results[i][0].transcript;
                     }
                 }
-
                 let cleanedText = cleanNoise(latestText);
-                if (cleanedText) {
-                    pushSubtitle(cleanedText);
-                }
+                if (cleanedText) pushSubtitle(cleanedText);
             };
 
             recognition.onerror = (event) => {
@@ -187,34 +293,25 @@
             recognition.onend = () => { if (isListening) autoRestart(); };
         }
 
-        // 瀑布流顶升与清除核心算法
+        const MAX_LINES = 3;
+
         function pushSubtitle(text) {
-            // 移除初始化的提示语
             const tipNode = document.getElementById('init-tip');
             if (tipNode) tipNode.remove();
 
-            // 1. 创建新字幕行
             const newLine = document.createElement('div');
             newLine.className = 'subtitle-line';
-            
-            // OLED防烧屏位置微调 (每次生成新行时随机抖动 1 像素)
             let jitterX = Math.floor(Math.random() * 3) - 1;
             newLine.style.marginLeft = `${jitterX}px`;
-
             newLine.innerText = text;
-
-            // 2. 将新字幕从底部塞入容器（新行诞生，旧行自动被往上顶）
             container.appendChild(newLine);
 
-            // 3. 检查堆积数量，如果超过限制，剥离最顶部的旧字幕
             const currentLines = container.getElementsByClassName('subtitle-line');
             if (currentLines.length > MAX_LINES) {
                 const oldestLine = currentLines[0];
-                oldestLine.style.opacity = '0'; // 触发淡出
+                oldestLine.style.opacity = '0';
                 setTimeout(() => {
-                    if (oldestLine && oldestLine.parentNode === container) {
-                        oldestLine.remove(); // 彻底从DOM树移除
-                    }
+                    if (oldestLine && oldestLine.parentNode === container) oldestLine.remove();
                 }, 300);
             }
         }
@@ -222,15 +319,14 @@
         async function autoRestart() {
             if (recognition) { try { recognition.stop(); } catch(e){} }
             setTimeout(async () => {
-                if (isListening) { 
-                    await killEchoAndBoost(); // 重启音频对抗
-                    initRecognition(); 
-                    try { recognition.start(); } catch(e){} 
+                if (isListening) {
+                    await killEchoAndBoost();
+                    initRecognition();
+                    try { recognition.start(); } catch(e){}
                 }
-            }, 50); // 极速 50ms 无缝重启，死咬日语语音
+            }, 50);
         }
 
-        // 点击字幕区域任意位置手动清屏
         container.onclick = () => {
             container.innerHTML = '';
             if (!isListening) {
@@ -264,23 +360,25 @@
             if (!isListening) {
                 isListening = true;
                 container.innerHTML = '';
-                
-                await killEchoAndBoost(); // 1. 先激活底层防过滤音频约束
-                initRecognition();        // 2. 再初始化语音识别
-                
+
+                await killEchoAndBoost();
+                initRecognition();
+
                 try { recognition.start(); } catch(e) { initRecognition(); recognition.start(); }
-                
+
                 startBtn.innerText = "停止";
                 startBtn.style.backgroundColor = "#ff3b30";
                 pushSubtitle(langSelect.value === "en-US" ? "System listening..." : "システム聴取中...");
             } else {
                 isListening = false;
                 if (recognition) { try { recognition.stop(); } catch(e){} }
-                if (audioStream) { audioStream.getTracks().forEach(track => track.stop()); audioStream = null; }
-                
+                if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null; }
+                if (audioCtx) { try { audioCtx.close(); } catch(e){} audioCtx = null; }
+                stopVolumeMonitor();
+
                 startBtn.innerText = "开启字幕";
                 startBtn.style.backgroundColor = "#007aff";
-                
+
                 container.innerHTML = '';
                 const initNode = document.createElement('div');
                 initNode.className = 'subtitle-line';
