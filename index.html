@@ -177,7 +177,7 @@
         let gainNode = null;
         let analyserNode = null;
         let volumeTimer = null;
-        const GAIN_VALUE = 4.0; // 音量放大倍数，效果不好可改为 5.0 或 6.0
+        const GAIN_VALUE = 4.0;
 
         function startVolumeMonitor() {
             if (!analyserNode) return;
@@ -269,7 +269,7 @@
 
         function initRecognition() {
             recognition = new SpeechRecognition();
-            recognition.continuous = true;
+            recognition.continuous = false;
             recognition.interimResults = false;
             recognition.lang = langSelect.value;
 
@@ -320,11 +320,10 @@
             if (recognition) { try { recognition.stop(); } catch(e){} }
             setTimeout(async () => {
                 if (isListening) {
-                    await killEchoAndBoost();
                     initRecognition();
                     try { recognition.start(); } catch(e){}
                 }
-            }, 50);
+            }, 0);
         }
 
         container.onclick = () => {
@@ -348,7 +347,6 @@
 
             if (isListening) {
                 if (recognition) { try { recognition.stop(); } catch(e){} }
-                await killEchoAndBoost();
                 initRecognition();
                 try { recognition.start(); } catch(e){}
             } else {
